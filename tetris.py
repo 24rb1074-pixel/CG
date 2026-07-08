@@ -566,9 +566,9 @@ def keyboard(window, key, scancode, action, mods):
         return
 
     # 終了とリスタートは常に受け付ける
-    if action == glfw.PRESS and key == glfw.KEY_Q:
+    if action == glfw.PRESS and key == glfw.KEY_U:
         glfw.set_window_should_close(window, True)
-        print("Q key pressed - exiting")
+        print("U key pressed - exiting")
         return
 
     if action == glfw.PRESS and key == glfw.KEY_R:
@@ -632,11 +632,11 @@ def keyboard(window, key, scancode, action, mods):
         last_drop_time = glfw.get_time()
 
     # ↑／X：右回転
-    elif action == glfw.PRESS and key in (glfw.KEY_UP, glfw.KEY_X):
+    elif action == glfw.PRESS and key in (glfw.KEY_UP, glfw.KEY_E):
         rotate_mino("right")
 
     # Z／Left Ctrl：左回転
-    elif action == glfw.PRESS and key in (glfw.KEY_Z, glfw.KEY_LEFT_CONTROL):
+    elif action == glfw.PRESS and key in (glfw.KEY_Q, glfw.KEY_LEFT_CONTROL):
         rotate_mino("left")
 
     # C／Left Shift：ホールド
@@ -729,8 +729,8 @@ if __name__ == "__main__":
 ← / →          |  左右移動
 ↓              |  ソフトドロップ
 Space          |  ハードドロップ
-↑ / X          |  右回転
-Z / Left Ctrl  |  左回転
+↑ / E          |  右回転
+Q / Left Ctrl  |  左回転
 C / Left Shift |  ホールド
 Esc            |  ポーズ/再開
 R              |  リスタート
