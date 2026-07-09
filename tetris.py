@@ -2,6 +2,8 @@ import glfw
 from OpenGL.GL import *
 from OpenGL.GLU import *
 import numpy as np
+from PIL import Image
+from pathlib import Path
 
 
 vertex = np.array([
@@ -97,6 +99,41 @@ lock_reset_counter = 0  # ロックタイマーリセットの回数をカウン
 max_lock_resets = 15  # ロックタイマーをリセットできる最大回数
 mino_bag = []  # ミノのバグを管理するリスト
 pause_started_time = None  # ポーズを開始した時刻
+
+def initTextureFromFile(filename):
+
+    with Image.open(filename) as img:
+        # glTexImage2D に渡す形式を RGB に統一する。
+        image = img.convert("RGB")
+        # PIL と OpenGL では画像の原点が上下逆なので反転する。
+        image = image.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+        width, height = image.size
+        data = image.tobytes()
+
+    texture_id = glGenTextures(1)
+    glBindTexture(GL_TEXTURE_2D, texture_id)
+
+    # テクスチャ画像はバイト単位に詰め込まれている。
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGB,
+        width,
+        height,
+        0,
+        GL_RGB,
+        GL_UNSIGNED_BYTE,
+        data,
+    )
+
+    # テクスチャの補間方法を指定する。
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+    glBindTexture(GL_TEXTURE_2D, 0)
+    return texture_id
 
 # ゲーム状態を初期化（リセット）する関数
 def reset_game():
@@ -493,6 +530,10 @@ def drawFrame():
     glLineWidth(1.0)
     glEnable(GL_LIGHTING) # ライティングを元に戻す
 
+def drawDigitOnCube(x, y, z, ):
+
+    glEnable(GL_TEXTURE_2D)
+    glBindTexture(GL_TEXTURE_2D, text_texture_id)
 
 # NEXT/HOLDプレビューの外枠を描画する関数
 def drawPreviewFrame():
