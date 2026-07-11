@@ -133,6 +133,7 @@ def initTextureFromFile(filename):
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
     glBindTexture(GL_TEXTURE_2D, 0)
+    
     return texture_id
 
 # ゲーム状態を初期化（リセット）する関数
@@ -264,7 +265,7 @@ def rotate_mino(direction):
         lock_reset_counter += 1  # リセット回数をカウント
 
 
-def display():
+def display(texture_id):
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
     # モデルビュー変換行列の設定
     glMatrixMode(GL_MODELVIEW)
@@ -364,6 +365,8 @@ def display():
     glTranslatef(5.0, 0.0, -1.0)
     drawPlaneY(12)
     glPopMatrix()
+    
+    drawDigitOnCube(0.5, 21.0, 0.0, texture_id)  # スコア表示用の数字を描画
 
     # 背景
     glPushMatrix()
@@ -530,10 +533,25 @@ def drawFrame():
     glLineWidth(1.0)
     glEnable(GL_LIGHTING) # ライティングを元に戻す
 
-def drawDigitOnCube(x, y, z, ):
-
+def drawDigitOnCube(x, y, z, texture_id):
     glEnable(GL_TEXTURE_2D)
-    glBindTexture(GL_TEXTURE_2D, text_texture_id)
+    glBindTexture(GL_TEXTURE_2D, texture_id)
+    
+    glPushMatrix()
+    glTranslatef(x, y, z)
+    
+    i = 5
+    glBegin(GL_QUADS)
+    for j in range(4):
+        glNormal3fv(normals[i])
+        glVertex3fv(vertex[face[i][j]])
+    glEnd()
+    
+    glPopMatrix()
+    
+    glBindTexture(GL_TEXTURE_2D, 0)
+    glDisable(GL_TEXTURE_2D)
+    
 
 # NEXT/HOLDプレビューの外枠を描画する関数
 def drawPreviewFrame():
@@ -597,7 +615,7 @@ def check_line_clear():
     return lines_cleared
 
 # キーボード入力のコールバックを登録
-def keyboard(window, key, scancode, action, mods):
+def keyboard(window, key, scancode, action, mods, texture_id):
     global drop_switch, mino_pos, mino, current_mino_type, last_drop_time
     global next_mino_type, hold_mino_type, can_hold, game_over
     global lock_timer, lock_reset_counter, pause_started_time, score, total_lines_cleared
@@ -708,10 +726,10 @@ def keyboard(window, key, scancode, action, mods):
             
             
 
-    refresh(window)
+    refresh(window, texture_id)
     
-def refresh(window):
-    display()
+def refresh(window, texture_id):
+    display(texture_id)
     glfw.swap_buffers(window)
     
 def perspective(width, height):
@@ -748,16 +766,19 @@ def main():
     window = glfw.create_window(512, 768, "3D Tetris", None, None)
     glfw.make_context_current(window)
     init()
+    texture_id = initTextureFromFile("digits/0.png")
     
-    glfw.set_window_refresh_callback(window, refresh)
+    glfw.set_window_refresh_callback(window, lambda w: refresh(w, texture_id))
     glfw.set_key_callback(window, keyboard)
     
-    refresh(window)
+    refresh(window, texture_id)
     
     while not glfw.window_should_close(window):
-        display()
+        display(texture_id)
         glfw.swap_buffers(window)
         glfw.poll_events()
+        
+    glDeleteTextures([texture_id])
     glfw.destroy_window(window)
     glfw.terminate()
 
