@@ -1,0 +1,848 @@
+import glfw
+from OpenGL.GL import *
+from OpenGL.GLU import *
+import numpy as np
+from PIL import Image
+from pathlib import Path
+from dataclasses import dataclass, field
+
+
+vertex = np.array([
+( 0.0, 0.0, 0.0 ), # A
+( 1.0, 0.0, 0.0 ), # B
+( 1.0, 1.0, 0.0 ), # C
+( 0.0, 1.0, 0.0 ), # D
+( 0.0, 0.0, 1.0 ), # E
+( 1.0, 0.0, 1.0 ), # F
+( 1.0, 1.0, 1.0 ), # G
+( 0.0, 1.0, 1.0 ) # H
+])
+
+edge = np.array([
+[0, 1], [1, 2], [2, 3], [3, 0], # 蠎暮擇縺ｮ霎ｺ
+[4, 5], [5, 6], [6, 7], [7, 4], # 荳企擇縺ｮ霎ｺ
+[0, 4], [1, 5], [2, 6], [3, 7]  # 蛛ｴ髱｢縺ｮ霎ｺ
+])
+
+# 譎りｨ亥屓繧翫↓險ｭ螳・
+face = np.array([
+[3, 2, 1, 0], # D-C-B-A 繧堤ｵ舌・髱｢
+[2, 1, 5, 6], # C-B-F-G 繧堤ｵ舌・髱｢
+[6, 5, 4, 7], # G-F-E-H 繧堤ｵ舌・髱｢
+[3, 7, 4, 0], # D-H-E-A 繧堤ｵ舌・髱｢
+[0, 4, 5, 1], # A-E-F-B 繧堤ｵ舌・髱｢
+[7, 3, 2, 6]  # H-D-C-G 繧堤ｵ舌・髱｢
+])
+
+normals = np.array([
+[ 0.0, 0.0,-1.0], # D-C-B-A 繧堤ｵ舌・髱｢縺ｮ豕慕ｷ・
+[ 0.0, 1.0, 0.0], # C-B-F-G 繧堤ｵ舌・髱｢縺ｮ豕慕ｷ・
+[ 0.0, 0.0, 1.0], # G-F-E-H 繧堤ｵ舌・髱｢縺ｮ豕慕ｷ・
+[ 0.0,-1.0, 0.0], # D-H-E-A 繧堤ｵ舌・髱｢縺ｮ豕慕ｷ・
+[-1.0, 0.0, 0.0], # A-E-F-B 繧堤ｵ舌・髱｢縺ｮ豕慕ｷ・
+[ 1.0, 0.0, 0.0]  # H-D-C-G 繧堤ｵ舌・髱｢縺ｮ豕慕ｷ・
+])
+
+minos = {
+    "I": np.array([[-1, 0, 0], [0, 0, 0], [1, 0, 0], [2, 0, 0]]),
+    "O": np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]]),
+    "T": np.array([[-1, 0, 0], [0, 0, 0], [1, 0, 0], [0, 1, 0]]),
+    "S": np.array([[0, 0, 0], [1, 0, 0], [-1, 1, 0], [0, 1, 0]]),
+    "Z": np.array([[-1, 0, 0], [0, 0, 0], [0, 1, 0], [1, 1, 0]]),
+    "J": np.array([[-1, 0, 0], [0, 0, 0], [1, 0, 0], [-1, 1, 0]]),
+    "L": np.array([[-1, 0, 0], [0, 0, 0], [1, 0, 0], [1, 1, 0]])
+}
+
+kick_tests = [
+    [0, 0, 0],
+    [1, 0, 0],
+    [-1, 0, 0],
+    [0, 1, 0],
+    [2, 0, 0],
+    [-2, 0, 0],
+]
+
+# 濶ｲ縺ｮ螳夂ｾｩ
+COLORS = {
+    "I": (0.0, 1.0, 1.0),  # 繧ｷ繧｢繝ｳ
+    "O": (1.0, 1.0, 0.0),  # 鮟・
+    "T": (1.0, 0.0, 1.0),  # 繝槭ぞ繝ｳ繧ｿ
+    "S": (0.0, 1.0, 0.0),  # 邱・
+    "Z": (1.0, 0.0, 0.0),  # 襍､
+    "J": (0.0, 0.0, 1.0),  # 髱・
+    "L": (1.0, 0.5, 0.0)   # 繧ｪ繝ｬ繝ｳ繧ｸ
+}
+
+# 繝輔ぅ繝ｼ繝ｫ繝峨↓菫晏ｭ倥☆繧九◆繧√・濶ｲID
+COLOR_IDS = {"I": 1, "O": 2, "T": 3, "S": 4, "Z": 5, "J": 6, "L": 7}
+# 謠冗判譎ゅ↓ID縺九ｉ濶ｲ繧貞叙繧雁・縺吶◆繧√・霎樊嶌
+ID_TO_COLOR = {1: COLORS["I"], 2: COLORS["O"], 3: COLORS["T"], 4: COLORS["S"], 5: COLORS["Z"], 6: COLORS["J"], 7: COLORS["L"]}
+
+@dataclass
+class GameState:
+    current_mino_type: str | None = None
+    next_mino_type: str | None = None
+    next_mino_queue: list = field(default_factory=list)
+    hold_mino_type: str | None = None
+    can_hold: bool = True
+
+    mino_pos: np.ndarray | None = None
+    mino: np.ndarray | None = None
+    field: np.ndarray | None = None
+
+    score: int = 0
+    total_lines_cleared: int = 0
+    last_total_lines_cleared: int = 0
+
+    game_over: bool = False
+    drop_switch: bool = True
+
+    last_drop_time: float = 0.0
+    lock_timer: float | None = None
+    lock_reset_counter: int = 0
+    pause_started_time: float | None = None
+
+    mino_bag: list = field(default_factory=list)
+
+state = GameState()
+
+def initTextureFromFile(filename):
+
+    with Image.open(filename) as img:
+        # glTexImage2D 縺ｫ貂｡縺吝ｽ｢蠑上ｒ RGB 縺ｫ邨ｱ荳縺吶ｋ縲・
+        image = img.convert("RGB")
+        # PIL 縺ｨ OpenGL 縺ｧ縺ｯ逕ｻ蜒上・蜴溽せ縺御ｸ贋ｸ矩・↑縺ｮ縺ｧ蜿崎ｻ｢縺吶ｋ縲・
+        image = image.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+        width, height = image.size
+        data = image.tobytes()
+
+    texture_id = int(glGenTextures(1))
+    glBindTexture(GL_TEXTURE_2D, texture_id)
+
+    # 繝・け繧ｹ繝√Ε逕ｻ蜒上・繝舌う繝亥腰菴阪↓隧ｰ繧∬ｾｼ縺ｾ繧後※縺・ｋ縲・
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGB,
+        width,
+        height,
+        0,
+        GL_RGB,
+        GL_UNSIGNED_BYTE,
+        data,
+    )
+
+    # 繝・け繧ｹ繝√Ε縺ｮ陬憺俣譁ｹ豕輔ｒ謖・ｮ壹☆繧九・
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+    glBindTexture(GL_TEXTURE_2D, 0)
+    
+    return texture_id
+
+# 繧ｲ繝ｼ繝迥ｶ諷九ｒ蛻晄悄蛹厄ｼ医Μ繧ｻ繝・ヨ・峨☆繧矩未謨ｰ
+def reset_game():
+    
+    state.score = 0
+    state.total_lines_cleared = 0
+    state.last_total_lines_cleared = 0
+    gaming_color_param = 1.0
+    state.lock_reset_counter = 0
+    state.lock_timer = None
+    state.pause_started_time = None
+
+    state.mino_bag.clear()  # 繝溘ヮ縺ｮ繝舌げ繧偵け繝ｪ繧｢
+    state.current_mino_type = get_next_mino_type()
+    state.next_mino_queue.clear()  # 繝阪け繧ｹ繝医く繝･繝ｼ繧貞・譛溷喧
+    refill_next_queue()
+    state.next_mino_type = state.next_mino_queue[0]  # 繝阪け繧ｹ繝医く繝･繝ｼ縺ｮ蜈磯ｭ繧呈ｬ｡縺ｮ繝溘ヮ縺ｨ縺励※險ｭ螳・
+    state.hold_mino_type = None
+    state.can_hold = True
+    state.mino_pos = np.array([4.0, 19.0, 0.0])
+    state.mino = np.copy(minos[state.current_mino_type])
+    
+    state.drop_switch = True
+    state.last_drop_time = glfw.get_time()
+    state.field = np.zeros((20, 10), dtype=int) 
+    state.game_over = False
+    print("Game Reset!")
+# ==========================
+
+
+def get_next_mino_type():
+    
+    if not state.mino_bag:
+        state.mino_bag.extend(list(minos.keys()))
+        np.random.shuffle(state.mino_bag)
+    return state.mino_bag.pop()
+
+def refill_next_queue():
+    while len(state.next_mino_queue) < 5:
+        state.next_mino_queue.append(get_next_mino_type())
+        
+# 繝溘ヮ繧偵ヵ繧｣繝ｼ繝ｫ繝峨↓蝗ｺ螳壹＠縲∵眠縺励＞繝溘ヮ繧堤函謌舌☆繧・
+def lock_and_spawn_mino():
+
+    if state.game_over:
+        return  # 繧ｲ繝ｼ繝繧ｪ繝ｼ繝舌・譎ゅ・菴輔ｂ縺励↑縺・
+
+    # 蝗ｺ螳壼・逅・
+    color_id = COLOR_IDS[state.current_mino_type]
+    # 繝溘ヮ縺ｮ4縺､縺ｮ繝悶Ο繝・け繧偵ヵ繧｣繝ｼ繝ｫ繝峨↓蝗ｺ螳・
+    for i in range(4):
+        x = int(state.mino_pos[0] + state.mino[i][0])
+        y = int(state.mino_pos[1] + state.mino[i][1])
+        if 0 <= x < 10 and 0 <= y < 20 and state.field[y][x] == 0:
+            state.field[y][x] = color_id
+
+    # 陦後・繧ｯ繝ｪ繧｢繧偵メ繧ｧ繝・け
+    lines_cleared = check_line_clear()
+    if lines_cleared == 1:
+        state.score += 100
+    elif lines_cleared == 2:
+        state.score += 300
+    elif lines_cleared == 3:
+        state.score += 500
+    elif lines_cleared == 4:
+        state.score += 800 
+    
+    # 繝医・繧ｿ繝ｫ繝ｩ繧､繝ｳ謨ｰ繧呈峩譁ｰ
+    state.total_lines_cleared += lines_cleared
+    
+    # 繝ｬ繝吶Ν繧｢繝・・縺ｮ蛻､螳夲ｼ・0繝ｩ繧､繝ｳ縺斐→縺ｫ繝ｬ繝吶Ν繧｢繝・・・・
+    if state.total_lines_cleared // 10 > state.last_total_lines_cleared // 10:
+        print(f"Level Up! Total Lines Cleared: {state.total_lines_cleared}")
+    
+    # 譛蠕後・繝ｬ繝吶Ν繧｢繝・・譎ゅ・繝ｩ繧､繝ｳ謨ｰ繧呈峩譁ｰ
+    state.last_total_lines_cleared = state.total_lines_cleared
+
+    # 譁ｰ縺励＞繝溘ヮ繧堤函謌・
+    state.mino_pos = np.array([4.0, 19.0, 0.0])
+    
+    state.current_mino_type = state.next_mino_queue.pop(0)
+    refill_next_queue()  # 繝阪け繧ｹ繝医く繝･繝ｼ繧貞・蜈・｡ｫ
+    state.next_mino_type = state.next_mino_queue[0] 
+    
+    state.mino = np.copy(minos[state.current_mino_type])
+    state.can_hold = True  # 譁ｰ縺励＞繝溘ヮ縺檎函謌舌＆繧後◆縺ｮ縺ｧ繝帙・繝ｫ繝牙庄閭ｽ縺ｫ縺吶ｋ
+    state.lock_timer = None  # 譁ｰ縺励＞繝溘ヮ縺檎函謌舌＆繧後◆縺ｮ縺ｧ繝ｭ繝・け繧ｿ繧､繝槭・繧偵Μ繧ｻ繝・ヨ
+    state.lock_reset_counter = 0  # 繝ｭ繝・け繝ｪ繧ｻ繝・ヨ繧ｫ繧ｦ繝ｳ繧ｿ繝ｼ繧偵Μ繧ｻ繝・ヨ
+
+
+    # 繧ｲ繝ｼ繝繧ｪ繝ｼ繝舌・蛻､螳・
+    if check_collision(state.mino_pos, state.mino):
+        print("Game Over!")
+        print(f"Final Score: {state.score}, Total Lines Cleared: {state.total_lines_cleared}")
+        print("Press R to restart the game.")
+        state.drop_switch = False
+        state.game_over = True
+
+def rotate_mino(direction):
+    
+    if state.current_mino_type == "O":
+        return  # O繝溘ヮ縺ｯ蝗櫁ｻ｢縺励↑縺・
+    
+    new_mino = np.copy(state.mino)
+    if direction == "left":
+        for i in range(4):
+            new_mino[i][0] = -state.mino[i][1]
+            new_mino[i][1] = state.mino[i][0]
+    elif direction == "right":
+        for i in range(4):
+            new_mino[i][0] = state.mino[i][1]
+            new_mino[i][1] = -state.mino[i][0]
+    else:
+        return  # 辟｡蜉ｹ縺ｪ譁ｹ蜷代・蝣ｴ蜷医・菴輔ｂ縺励↑縺・
+            
+    rotated = False
+
+    # 蝗櫁ｻ｢蠕後・菴咲ｽｮ縺ｧ陦晉ｪ∝愛螳・
+    # 繧ｭ繝・け繝・せ繝医ｒ隧ｦ縺・
+    for test in kick_tests:
+        test_pos = state.mino_pos + np.array(test)
+        if not check_collision(test_pos, new_mino):
+            state.mino_pos = test_pos
+            state.mino = new_mino
+            rotated = True
+            break  # 繧ｭ繝・け謌仙粥縺励◆繧峨Ν繝ｼ繝励ｒ謚懊￠繧・
+    
+    if rotated and state.lock_reset_counter < max_lock_resets and state.lock_timer is not None:
+        state.lock_timer = None  # 蝗櫁ｻ｢縺励◆縺ｮ縺ｧ繝ｭ繝・け繧ｿ繧､繝槭・繧偵Μ繧ｻ繝・ヨ
+        state.lock_reset_counter += 1  # 繝ｪ繧ｻ繝・ヨ蝗樊焚繧偵き繧ｦ繝ｳ繝・
+
+
+def display():
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+    # 繝｢繝・Ν繝薙Η繝ｼ螟画鋤陦悟・縺ｮ險ｭ螳・
+    glMatrixMode(GL_MODELVIEW)
+    glLoadIdentity()
+    
+    gluLookAt(15.0, 10.0, 30.0, 5.0, 10.0, 0.0, 0.0, 1.0, 0.0)
+    
+    glFrontFace(GL_CW) # 譎りｨ亥屓繧翫ｒ陦ｨ髱｢縺ｨ縺吶ｋ
+    glCullFace(GL_BACK)
+    
+    light_position = [5.0, 10.0, 20.0, 1.0]
+    glLightfv(GL_LIGHT0, GL_POSITION, light_position)
+    current_time = glfw.get_time()   
+    
+    # === 繝ｭ繧ｸ繝・け蜃ｦ逅・===
+    if not state.game_over and state.drop_switch:
+        fall_interval = max(
+            0.1,
+            1.0 - (state.total_lines_cleared // 10) * 0.1
+        )
+
+        # 騾壼ｸｸ關ｽ荳・
+        if current_time - state.last_drop_time > fall_interval:
+            state.last_drop_time = current_time
+            next_pos = state.mino_pos + np.array([0, -1, 0])
+
+            if not check_collision(next_pos, state.mino):
+                state.mino_pos = next_pos
+
+        # 謗･蝨ｰ迥ｶ諷九ｒ豈弱ヵ繝ｬ繝ｼ繝遒ｺ隱・
+        grounded = check_collision(
+            state.mino_pos + np.array([0, -1, 0]),
+            state.mino
+        )
+
+        if grounded:
+            # 謗･蝨ｰ縺励◆迸ｬ髢薙↓荳蠎ｦ縺縺鷹幕蟋・
+            if state.lock_timer is None:
+                state.lock_timer = current_time
+
+            # 0.5遘堤ｵ碁℃縺励◆繧牙崋螳・
+            elif current_time - state.lock_timer >= lock_delay:
+                lock_and_spawn_mino()
+        else:
+            # 謗･蝨ｰ迥ｶ諷九°繧画栢縺代◆
+            state.lock_timer = None
+
+
+
+        # === 謠冗判蜃ｦ逅・===
+    
+    # 1. 蝗ｺ螳壹＆繧後◆繝輔ぅ繝ｼ繝ｫ繝峨ｒ謠冗判    
+    glPushMatrix()
+    drawField() 
+    drawFrame()
+    glPopMatrix()
+    
+    # 2. 繝阪け繧ｹ繝医→繝帙・繝ｫ繝峨ｒ謠冗判
+    drawNextMinoPreview()
+
+    glPushMatrix()
+    glTranslatef(-4.0, 15.0, 0.0)
+    drawPreviewFrame()
+    if state.hold_mino_type is not None:
+        for i in range(4):
+            drawCube(minos[state.hold_mino_type][i][0], minos[state.hold_mino_type][i][1], minos[state.hold_mino_type][i][2], COLORS[state.hold_mino_type])
+    glPopMatrix()
+        
+    # 3. 謫堺ｽ應ｸｭ縺ｮ繝溘ヮ縺ｨ繧ｴ繝ｼ繧ｹ繝医ｒ謠冗判・遺ｻ繧ｲ繝ｼ繝繧ｪ繝ｼ繝舌・譎ゅ・謠冗判縺励↑縺・ｼ・
+    if not state.game_over:
+        # 繧ｴ繝ｼ繧ｹ繝医Α繝・
+        ghost_pos = state.mino_pos.copy()
+        # 繧ｴ繝ｼ繧ｹ繝医Α繝弱・菴咲ｽｮ繧定ｨ育ｮ励☆繧・
+        while not check_collision(ghost_pos + np.array([0, -1, 0]), state.mino):
+            ghost_pos += np.array([0, -1, 0])
+
+        for i in range(4):
+            drawGhostCube(ghost_pos[0] + state.mino[i][0], ghost_pos[1] + state.mino[i][1], ghost_pos[2] + state.mino[i][2], COLORS[state.current_mino_type])
+
+        # 謫堺ｽ應ｸｭ繝溘ヮ
+        glPushMatrix()
+        glTranslatef(state.mino_pos[0], state.mino_pos[1], state.mino_pos[2]) 
+        for i in range(4):
+            drawCube(state.mino[i][0], state.mino[i][1], state.mino[i][2], COLORS[state.current_mino_type]) 
+        glPopMatrix()
+        
+    # 閭梧勹縺ｮ陬・｣ｾ
+    # 蠎・
+    glPushMatrix()
+    glTranslatef(5.0, 0.0, -1.0)
+    drawPlaneY(12)
+    glPopMatrix()
+    
+    drawScorePreview()
+
+    # 閭梧勹
+    glPushMatrix()
+    glTranslatef(5.0, 10.0, -1.0)
+    drawPlaneZ(22)
+    glPopMatrix()
+        
+    
+# 繝悶Ο繝・け繧呈緒逕ｻ縺吶ｋ髢｢謨ｰ
+def drawCube(x=0.0, y=0.0, z=0.0, color=(1.0, 1.0, 1.0), texture_id=None):
+    light_enabled = glGetBooleanv(GL_LIGHTING)
+
+    glPushMatrix()
+    glTranslatef(x, y, z)
+
+    # 髱｢繧呈緒逕ｻ
+    glEnable(GL_LIGHTING)
+
+    mat_specular = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32)
+    glMaterialfv(GL_FRONT, GL_SPECULAR, mat_specular)
+    glMaterialf(GL_FRONT, GL_SHININESS, 128.0)
+
+    for i in range(6):
+        if state.game_over:
+            glColor3fv((0.5, 0.5, 0.5))
+        else:
+            glColor3fv(color)
+
+        glBegin(GL_QUADS)
+        for j in range(4):
+            glNormal3fv(normals[i])
+            glVertex3fv(vertex[face[i][j]])
+        glEnd()
+
+    if texture_id is not None and not state.game_over:
+        glDisable(GL_LIGHTING)
+        glEnable(GL_TEXTURE_2D)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        glBindTexture(GL_TEXTURE_2D, texture_id)
+        glColor3f(1.0, 1.0, 1.0)
+
+        # z+ 蛛ｴ縺ｮ髱｢縺ｫ縲√⊇繧薙・蟆代＠謇句燕縺ｸ縺壹ｉ縺励※謨ｰ蟄励ｒ雋ｼ繧・
+        # 縺壹ｉ縺輔↑縺・→繧ｭ繝･繝ｼ繝夜擇縺ｨ蜷後§豺ｱ蠎ｦ縺ｫ縺ｪ縺｣縺ｦ繝√Λ縺､縺阪ｄ縺吶＞
+        offset = np.array([0.0, 0.0, 0.01])
+        glBegin(GL_QUADS)
+        glNormal3fv(normals[2])
+        glTexCoord2f(1.0, 1.0)
+        glVertex3fv(vertex[face[2][0]] + offset)
+        glTexCoord2f(1.0, 0.0)
+        glVertex3fv(vertex[face[2][1]] + offset)
+        glTexCoord2f(0.0, 0.0)
+        glVertex3fv(vertex[face[2][2]] + offset)
+        glTexCoord2f(0.0, 1.0)
+        glVertex3fv(vertex[face[2][3]] + offset)
+        glEnd()
+
+        glBindTexture(GL_TEXTURE_2D, 0)
+        glDisable(GL_TEXTURE_2D)
+        glDisable(GL_BLEND)
+        glEnable(GL_LIGHTING)
+
+    # 霈ｪ驛ｭ邱壹ｒ謠冗判
+    glDisable(GL_LIGHTING)
+    glColor3f(0.0, 0.0, 0.0)
+    glLineWidth(2.0)
+
+    glBegin(GL_LINES)
+    for i in range(12):
+        glVertex3fv(vertex[edge[i][0]])
+        glVertex3fv(vertex[edge[i][1]])
+    glEnd()
+
+    glPopMatrix()
+
+    # 蜈・・繝ｩ繧､繝・ぅ繝ｳ繧ｰ迥ｶ諷九↓謌ｻ縺・
+    if light_enabled:
+        glEnable(GL_LIGHTING)
+    else:
+        glDisable(GL_LIGHTING)
+
+def drawNextMinoPreview():
+    glPushMatrix()
+    glTranslatef(13.0, 18.0, 0.0)
+    
+    for preview_index, mino_type in enumerate(state.next_mino_queue[:5]):
+        glPushMatrix()
+        glTranslatef(0.0, -preview_index * 4.0, 0.0)
+
+        drawPreviewFrame()
+
+        for i in range(4):
+            drawCube(
+                minos[mino_type][i][0],
+                minos[mino_type][i][1],
+                minos[mino_type][i][2],
+                COLORS[mino_type]
+            )
+
+        glPopMatrix()
+
+    glPopMatrix()
+
+# 繧ｴ繝ｼ繧ｹ繝医ヶ繝ｭ繝・け繧呈緒逕ｻ縺吶ｋ髢｢謨ｰ
+# Draw state.score digits below the NEXT previews.
+def drawScorePreview():
+    score_digits = str(state.score)
+    for i, digit_char in enumerate(score_digits):
+        digit = int(digit_char)
+        texture_id = digit_texture_id_dict.get(digit)
+        drawCube(13.0 + i * 1.2, -1.0, 0.0, (1.0, 1.0, 1.0), texture_id)
+
+def drawGhostCube(x=0.0, y=0.0, z=0.0, color=(1.0, 1.0, 1.0)):
+    # 繧ｴ繝ｼ繧ｹ繝医ヶ繝ｭ繝・け縺ｯ蜊企乗・縺ｧ謠冗判縺吶ｋ
+    glEnable(GL_BLEND) # 繝悶Ξ繝ｳ繝峨ｒ譛牙柑縺ｫ縺吶ｋ
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA) # 繝悶Ξ繝ｳ繝蛾未謨ｰ繧定ｨｭ螳・
+    
+    glDepthMask(GL_FALSE) # 蠕檎ｶ壹・謠冗判縺ｧ縺ｯ豺ｱ蠎ｦ譖ｸ縺崎ｾｼ縺ｿ繧堤┌蜉ｹ縺ｫ縺吶ｋ
+
+    light_enabled = glGetBooleanv(GL_LIGHTING)
+    glEnable(GL_LIGHTING)
+    glPushMatrix()
+    glTranslatef(x, y, z)
+    
+    matWhite = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32)
+    glMaterialfv(GL_FRONT, GL_SPECULAR, matWhite)
+    glMaterialf(GL_FRONT, GL_SHININESS, 32.0)
+    
+    for i in range(6):
+        glColor4f(color[0], color[1], color[2], 0.3) # 蜊企乗・縺ｮ濶ｲ繧定ｨｭ螳・
+        glBegin(GL_QUADS)
+        for j in range(4):
+            glNormal3fv(normals[i])
+            glVertex3fv(vertex[face[i][j]])
+        glEnd()
+    glPopMatrix()
+
+    glDepthMask(GL_TRUE) # 蠕檎ｶ壹・騾壼ｸｸ謠冗判縺ｧ縺ｯ豺ｱ蠎ｦ譖ｸ縺崎ｾｼ縺ｿ繧貞・縺ｫ謌ｻ縺・
+    glDisable(GL_BLEND) # 繝悶Ξ繝ｳ繝峨ｒ辟｡蜉ｹ縺ｫ縺吶ｋ
+    
+    if not light_enabled:
+        glDisable(GL_LIGHTING)
+
+# 繝輔ぅ繝ｼ繝ｫ繝峨ｒ謠冗判縺吶ｋ髢｢謨ｰ
+def drawField():
+    for y in range(state.field.shape[0]):
+        for x in range(state.field.shape[1]):
+            val = state.field[y][x]
+            if val != 0:
+                drawCube(x, y, 0, ID_TO_COLOR[val])
+
+# Y霆ｸ譁ｹ蜷代・蟷ｳ髱｢繧呈緒逕ｻ縺吶ｋ髢｢謨ｰ
+def drawPlaneY(size):
+    glBegin(GL_QUADS)
+    glNormal3f(0.0, 1.0, 0.0)
+    for i in range(size):
+        for j in range(size):
+            x = i - 0.5 * size
+            z = j - 0.5 * size
+            if (i + j) % 2 == 0:
+                glColor3f(1, 1, 1)
+            else:
+                glColor3f(0.2, 0.2, 0.2)
+                
+            glVertex3f(x, 0, z)
+            glVertex3f(x + 1, 0, z)
+            glVertex3f(x + 1, 0, z + 1)
+            glVertex3f(x, 0, z + 1)
+    glEnd()
+
+# Z霆ｸ譁ｹ蜷代・蟷ｳ髱｢繧呈緒逕ｻ縺吶ｋ髢｢謨ｰ
+def drawPlaneZ(size):
+    
+    glBegin(GL_QUADS)
+    glNormal3f(0.0, 0.0, 0.5)
+    for i in range(size):
+        for j in range(size):
+            x = i - 0.5 * size
+            y = j - 0.5 * size
+            if (i + j) % 2 == 0:
+                if state.game_over:
+                    glColor3f(0.0, 0.0, 0.0)  # 轣ｰ濶ｲ
+                else:    
+                    glColor3f(0.0, 0.0, 0.0)  # 譏弱ｋ縺・・濶ｲ
+            else:
+                glColor3f(0.2, 0.2, 0.2)
+                
+            glVertex3f(x,     y,     0)
+            glVertex3f(x,     y + 1, 0)
+            glVertex3f(x + 1, y + 1, 0)
+            glVertex3f(x + 1, y,     0)
+    glEnd()
+
+# 繝輔Ξ繝ｼ繝繧呈緒逕ｻ縺吶ｋ髢｢謨ｰ
+def drawFrame():
+    glDisable(GL_LIGHTING) # 繝ｩ繧､繝・ぅ繝ｳ繧ｰ繧堤┌蜉ｹ縺ｫ縺励※遒ｺ螳溘↓濶ｲ繧貞・縺・
+    z = 1.01 # 繝悶Ο繝・け縺ｮ蜑埼擇(1.0)繧医ｊ縺ｻ繧薙・蟆代＠謇句燕縺ｫ謠上￥
+
+    glColor3f(0.7, 0.7, 0.7)  # 繝輔Ξ繝ｼ繝縺ｮ濶ｲ繧定ｨｭ螳・
+
+    # 蜀・・縺ｮ繧ｰ繝ｪ繝・ラ繧帝壼ｸｸ縺ｮ螟ｪ縺輔〒謠冗判
+    glLineWidth(2.0)
+    glBegin(GL_LINES)
+    for x in range(1, 10):
+        glVertex3f(x, 0, z)
+        glVertex3f(x, 20, z)
+
+    for y in range(1, 20):
+        glVertex3f(0, y, z)
+        glVertex3f(10, y, z)
+    glEnd()
+
+    # 螟匁棧縺縺代ｒ螟ｪ縺乗緒逕ｻ
+    glLineWidth(4.0)
+    glBegin(GL_LINE_LOOP)
+    glVertex3f(0, 0, z)
+    glVertex3f(10, 0, z)
+    glVertex3f(10, 20, z)
+    glVertex3f(0, 20, z)
+    glEnd()
+
+    # 蠕檎ｶ壹・謠冗判縺ｸ邱壼ｹ・ｒ谿九＆縺ｪ縺・
+    glLineWidth(1.0)
+    glEnable(GL_LIGHTING) # 繝ｩ繧､繝・ぅ繝ｳ繧ｰ繧貞・縺ｫ謌ｻ縺・
+
+# NEXT/HOLD繝励Ξ繝薙Η繝ｼ縺ｮ螟匁棧繧呈緒逕ｻ縺吶ｋ髢｢謨ｰ
+def drawPreviewFrame():
+    light_enabled = glIsEnabled(GL_LIGHTING)
+    glDisable(GL_LIGHTING)
+
+    # 蜈ｨ遞ｮ鬘槭・繝溘ヮ縺悟庶縺ｾ繧・x4縺ｮ譫
+    left, right = -2.0, 4.0
+    bottom, top = -1.0, 3.0
+    z = 1.01
+
+    glColor3f(1.0, 1.0, 1.0)
+    glLineWidth(3.0)
+    glBegin(GL_LINE_LOOP)
+    glVertex3f(left, bottom, z)
+    glVertex3f(right, bottom, z)
+    glVertex3f(right, top, z)
+    glVertex3f(left, top, z)
+    glEnd()
+
+    glLineWidth(1.0)
+    if light_enabled:
+        glEnable(GL_LIGHTING)
+
+# 陦晉ｪ∝愛螳夐未謨ｰ
+def check_collision(next_pos, next_mino):
+    # 4縺､縺ｮ繝悶Ο繝・け縺昴ｌ縺槭ｌ縺ｫ縺､縺・※隱ｿ縺ｹ繧・
+    for i in range(4):
+        # 1. 繝輔ぅ繝ｼ繝ｫ繝峨・邨ｶ蟇ｾ蠎ｧ讓吶ｒ險育ｮ励☆繧具ｼ亥渕貅紋ｽ咲ｽｮ ・・逶ｸ蟇ｾ菴咲ｽｮ・・
+        x = int(next_pos[0] + next_mino[i][0])
+        y = int(next_pos[1] + next_mino[i][1])
+
+        # 2. 螢√ｄ蠎翫ｒ遯√″謚懊￠縺ｦ縺・↑縺・°繝√ぉ繝・け
+        if x < 0 or x >= 10 or y < 0:
+            return True # 陦晉ｪ√＠縺滂ｼ・
+
+        # 3. 縺吶〒縺ｫ繝輔ぅ繝ｼ繝ｫ繝峨↓蝗ｺ螳壹＆繧後※縺・ｋ繝悶Ο繝・け縺ｨ驥阪↑縺｣縺ｦ縺・↑縺・°繝√ぉ繝・け
+        if 0 <= y < state.field.shape[0] and state.field[y][x] != 0:
+            return True # 陦晉ｪ√＠縺滂ｼ・
+            
+    return False # 縺ｩ縺薙↓繧り｡晉ｪ√＠縺ｪ縺九▲縺滂ｼ育ｧｻ蜍桧K・・ｼ・
+
+# 繝ｩ繧､繝ｳ豸亥悉繧偵メ繧ｧ繝・け縺吶ｋ髢｢謨ｰ
+def check_line_clear():
+    lines_cleared = 0
+    # 繝ｩ繧､繝ｳ豸亥悉繧｢繝ｫ繧ｴ繝ｪ繧ｺ繝
+    new_field = np.zeros((20, 10), dtype=int)
+    new_y = 0
+    
+    for y in range(20):
+        if np.all(state.field[y] != 0): # 縺昴・陦後′蜈ｨ縺ｦ蝓九∪縺｣縺ｦ縺・ｋ縺・
+            lines_cleared += 1
+            print(f"Line {y} cleared!")
+        else:
+            # 蝓九∪縺｣縺ｦ縺・↑縺・｡後□縺代ｒ譁ｰ縺励＞繝輔ぅ繝ｼ繝ｫ繝峨↓隧ｰ繧√※縺・￥
+            new_field[new_y] = state.field[y]
+            new_y += 1
+            
+    state.field = new_field # 繝輔ぅ繝ｼ繝ｫ繝峨ｒ荳頑嶌縺・
+    return lines_cleared
+
+# 繧ｭ繝ｼ繝懊・繝牙・蜉帙・繧ｳ繝ｼ繝ｫ繝舌ャ繧ｯ繧堤匳骭ｲ
+def keyboard(window, key, scancode, action, mods):
+
+    # RELEASE繧､繝吶Φ繝医・菴ｿ逕ｨ縺励↑縺・
+    if action not in (glfw.PRESS, glfw.REPEAT):
+        return
+
+    # 邨ゆｺ・→繝ｪ繧ｹ繧ｿ繝ｼ繝医・蟶ｸ縺ｫ蜿励￠莉倥￠繧・
+    if action == glfw.PRESS and key == glfw.KEY_ESCAPE:
+        glfw.set_window_should_close(window, True)
+        print("Escape key pressed - exiting")
+        return
+
+    if action == glfw.PRESS and key == glfw.KEY_R:
+        reset_game()
+        return
+
+    if state.game_over:
+        return
+
+    # P縺ｧ繝昴・繧ｺ・丞・髢九ょ●豁｢荳ｭ縺ｮ譎る俣繧貞推繧ｿ繧､繝槭・縺九ｉ髯､螟悶☆繧・
+    if action == glfw.PRESS and key == glfw.KEY_P:
+        current_time = glfw.get_time()
+        if state.drop_switch:
+            state.drop_switch = False
+            state.pause_started_time = current_time
+            print("Paused")
+        else:
+            if state.pause_started_time is not None:
+                paused_duration = current_time - state.pause_started_time
+                state.last_drop_time += paused_duration
+                if state.lock_timer is not None:
+                    state.lock_timer += paused_duration
+            state.drop_switch = True
+            state.pause_started_time = None
+            print("Resumed")
+        refresh(window)
+        return
+
+    # 繝昴・繧ｺ荳ｭ縺ｯ繧ｲ繝ｼ繝謫堺ｽ懊ｒ蜿励￠莉倥￠縺ｪ縺・
+    if not state.drop_switch:
+        return
+
+    # 蟾ｦ蜿ｳ遘ｻ蜍包ｼ域款縺励▲縺ｱ縺ｪ縺怜ｯｾ蠢懶ｼ・
+    if key == glfw.KEY_RIGHT:
+        if not check_collision(state.mino_pos + np.array([1, 0, 0]), state.mino):
+            state.mino_pos[0] += 1
+            if state.lock_reset_counter < max_lock_resets and state.lock_timer is not None:
+                state.lock_timer = None
+                state.lock_reset_counter += 1
+
+    elif key == glfw.KEY_LEFT:
+        if not check_collision(state.mino_pos + np.array([-1, 0, 0]), state.mino):
+            state.mino_pos[0] -= 1
+            if state.lock_reset_counter < max_lock_resets and state.lock_timer is not None:
+                state.lock_timer = None
+                state.lock_reset_counter += 1
+
+    # 竊難ｼ壹た繝輔ヨ繝峨Ο繝・・・域款縺励▲縺ｱ縺ｪ縺怜ｯｾ蠢懶ｼ・
+    elif key == glfw.KEY_DOWN:
+        next_pos = state.mino_pos + np.array([0, -1, 0])
+        if not check_collision(next_pos, state.mino):
+            state.mino_pos = next_pos
+            state.last_drop_time = glfw.get_time()
+            state.lock_timer = None
+
+    # Space・壹ワ繝ｼ繝峨ラ繝ｭ繝・・
+    elif action == glfw.PRESS and key == glfw.KEY_SPACE:
+        while not check_collision(state.mino_pos + np.array([0, -1, 0]), state.mino):
+            state.mino_pos[1] -= 1
+        lock_and_spawn_mino()
+        state.last_drop_time = glfw.get_time()
+
+    # 竊托ｼ醜・壼承蝗櫁ｻ｢
+    elif action == glfw.PRESS and key in (glfw.KEY_UP, glfw.KEY_E):
+        rotate_mino("right")
+
+    # Z・臭eft Ctrl・壼ｷｦ蝗櫁ｻ｢
+    elif action == glfw.PRESS and key in (glfw.KEY_Q, glfw.KEY_LEFT_CONTROL):
+        rotate_mino("left")
+
+    # C・臭eft Shift・壹・繝ｼ繝ｫ繝・
+    elif action == glfw.PRESS and key in (glfw.KEY_C, glfw.KEY_LEFT_SHIFT):
+        if state.can_hold:
+            if state.hold_mino_type is None:
+                state.hold_mino_type = state.current_mino_type
+                state.current_mino_type = state.next_mino_queue.pop(0)
+                refill_next_queue()  # 繝阪け繧ｹ繝医く繝･繝ｼ繧貞・蜈・｡ｫ
+                state.next_mino_type = state.next_mino_queue[0]  # 繝阪け繧ｹ繝医く繝･繝ｼ縺ｮ蜈磯ｭ繧呈ｬ｡縺ｮ繝溘ヮ縺ｨ縺励※險ｭ螳・
+                
+            else:
+                state.current_mino_type, state.hold_mino_type = state.hold_mino_type, state.current_mino_type
+
+            state.mino = np.copy(minos[state.current_mino_type])
+            state.mino_pos = np.array([4.0, 19.0, 0.0])
+            
+            if check_collision(state.mino_pos, state.mino):
+                print("Game Over!")
+                print(f"Final Score: {state.score}, Total Lines Cleared: {state.total_lines_cleared}")
+                print("Press R to restart the game.")
+                state.drop_switch = False
+                state.game_over = True
+                return
+            
+            state.lock_timer = None
+            state.lock_reset_counter = 0
+            state.last_drop_time = glfw.get_time()
+            state.can_hold = False
+            
+            
+
+    refresh(window)
+    
+def refresh(window):
+    display()
+    glfw.swap_buffers(window)
+    
+def perspective(width, height):
+    # 騾剰ｦ門､画鋤陦悟・縺ｮ險ｭ螳・
+    glMatrixMode(GL_PROJECTION)
+    glLoadIdentity()
+    gluPerspective(45.0, width / height, 1.0, 100.0)
+    # 繝｢繝・Ν繝薙Η繝ｼ螟画鋤陦悟・縺ｮ險ｭ螳・
+    glMatrixMode(GL_MODELVIEW)
+    
+def resize(window, width, height):
+    perspective(width, height)
+    
+def init():
+    glClearColor(0.2, 0.2, 0.2, 1.0)
+    perspective(512, 512)
+    
+    glEnable(GL_CULL_FACE)
+    glEnable(GL_DEPTH_TEST)
+    glEnable(GL_LIGHTING)
+    glEnable(GL_LIGHT0)
+    
+    glEnable(GL_COLOR_MATERIAL) 
+    glColorMaterial(GL_FRONT, GL_AMBIENT_AND_DIFFUSE)
+    
+    # 繧ｲ繝ｼ繝迥ｶ諷九ｒ蛻晄悄蛹・
+    reset_game()
+    
+def main():
+    global digit_texture_id_dict
+    glfw.init()
+    
+    glfw.window_hint(glfw.SAMPLES, 4)
+    
+    window = glfw.create_window(512, 768, "3D Tetris", None, None)
+    glfw.make_context_current(window)
+    init()
+    
+    BASE_DIR = Path(__file__).resolve().parent
+    DIGIT_DIR = BASE_DIR / "digits"
+
+    digit_texture_id_dict = {
+        i: initTextureFromFile(DIGIT_DIR / f"{i}.png")
+        for i in range(10)
+    }
+    
+    glfw.set_window_refresh_callback(window, refresh)
+    glfw.set_key_callback(window, keyboard)
+    
+    refresh(window)
+    
+    while not glfw.window_should_close(window):
+        display()
+        glfw.swap_buffers(window)
+        glfw.poll_events()
+        
+    if digit_texture_id_dict:
+        glDeleteTextures([int(texture_id) for texture_id in digit_texture_id_dict.values()])
+    glfw.destroy_window(window)
+    glfw.terminate()
+
+if __name__ == "__main__":
+    main()
+
+#==========================
+# 繧ｭ繝ｼ險ｭ螳壻ｸ隕ｧ
+'''
+竊・/ 竊・         |  蟾ｦ蜿ｳ遘ｻ蜍・
+竊・             |  繧ｽ繝輔ヨ繝峨Ο繝・・
+Space          |  繝上・繝峨ラ繝ｭ繝・・
+竊・/ E          |  蜿ｳ蝗櫁ｻ｢
+Q / Left Ctrl  |  蟾ｦ蝗櫁ｻ｢
+C / Left Shift |  繝帙・繝ｫ繝・
+P              |  繝昴・繧ｺ/蜀埼幕
+R              |  繝ｪ繧ｹ繧ｿ繝ｼ繝・
+Escape         |  邨ゆｺ・
+'''
+#==========================
