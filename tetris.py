@@ -81,6 +81,7 @@ ID_TO_COLOR = {1: COLORS["I"], 2: COLORS["O"], 3: COLORS["T"], 4: COLORS["S"], 5
 # グローバル変数の宣言
 current_mino_type = None
 next_mino_type = None
+next_mino_queue = []
 hold_mino_type = None
 can_hold = True 
 mino_pos = None
@@ -142,7 +143,7 @@ def initTextureFromFile(filename):
 def reset_game():
     global current_mino_type, next_mino_type, hold_mino_type, can_hold
     global mino_pos, mino, drop_switch, last_drop_time, field, game_over, score, total_lines_cleared, gaming_color_param, last_total_lines_cleared
-    global lock_timer, lock_reset_counter, mino_bag, pause_started_time
+    global lock_timer, lock_reset_counter, mino_bag, pause_started_time, next_mino_queue
     
     score = 0
     total_lines_cleared = 0
@@ -154,7 +155,9 @@ def reset_game():
 
     mino_bag.clear()  # ミノのバグをクリア
     current_mino_type = get_next_mino_type()
-    next_mino_type = get_next_mino_type()
+    next_mino_queue.clear()  # ネクストキューを初期化
+    refill_next_queue()
+    next_mino_type = next_mino_queue[0]  # ネクストキューの先頭を次のミノとして設定
     hold_mino_type = None
     can_hold = True
     mino_pos = np.array([4.0, 19.0, 0.0])
@@ -176,6 +179,11 @@ def get_next_mino_type():
         np.random.shuffle(mino_bag)
     return mino_bag.pop()
 
+def refill_next_queue():
+    global next_mino_queue
+    while len(next_mino_queue) < 5:
+        next_mino_queue.append(get_next_mino_type())
+        
 # ミノをフィールドに固定し、新しいミノを生成する
 def lock_and_spawn_mino():
     global field, mino_pos, mino, current_mino_type, drop_switch, next_mino_type, hold_mino_type
@@ -216,8 +224,11 @@ def lock_and_spawn_mino():
 
     # 新しいミノを生成
     mino_pos = np.array([4.0, 19.0, 0.0])
-    current_mino_type = next_mino_type
-    next_mino_type = get_next_mino_type()
+    
+    current_mino_type = next_mino_queue.pop(0)
+    refill_next_queue()  # ネクストキューを再充填
+    next_mino_type = next_mino_queue[0] 
+    
     mino = np.copy(minos[current_mino_type])
     can_hold = True  # 新しいミノが生成されたのでホールド可能にする
     lock_timer = None  # 新しいミノが生成されたのでロックタイマーをリセット
@@ -329,12 +340,7 @@ def display():
     glPopMatrix()
     
     # 2. ネクストとホールドを描画
-    glPushMatrix()
-    glTranslatef(13.0, 15.0, 0.0)
-    drawPreviewFrame()
-    for i in range(4):
-        drawCube(minos[next_mino_type][i][0], minos[next_mino_type][i][1], minos[next_mino_type][i][2], COLORS[next_mino_type])
-    glPopMatrix()
+    drawNextMinoPreview()
 
     glPushMatrix()
     glTranslatef(-4.0, 15.0, 0.0)
@@ -369,11 +375,7 @@ def display():
     drawPlaneY(12)
     glPopMatrix()
     
-    score_digits = str(score)
-    for i, digit_char in enumerate(score_digits):
-        digit = int(digit_char)
-        texture_id = digit_texture_id_dict.get(digit)
-        drawCube(13.0 + i * 1.2, 10.0, 0.0, (1.0, 1.0, 1.0), texture_id)  # スコア表示用の数字を描画
+    drawScorePreview()
 
     # 背景
     glPushMatrix()
@@ -455,7 +457,37 @@ def drawCube(x=0.0, y=0.0, z=0.0, color=(1.0, 1.0, 1.0), texture_id=None):
     else:
         glDisable(GL_LIGHTING)
 
+def drawNextMinoPreview():
+    glPushMatrix()
+    glTranslatef(13.0, 18.0, 0.0)
+    
+    for preview_index, mino_type in enumerate(next_mino_queue[:5]):
+        glPushMatrix()
+        glTranslatef(0.0, -preview_index * 4.0, 0.0)
+
+        drawPreviewFrame()
+
+        for i in range(4):
+            drawCube(
+                minos[mino_type][i][0],
+                minos[mino_type][i][1],
+                minos[mino_type][i][2],
+                COLORS[mino_type]
+            )
+
+        glPopMatrix()
+
+    glPopMatrix()
+
 # ゴーストブロックを描画する関数
+# Draw score digits below the NEXT previews.
+def drawScorePreview():
+    score_digits = str(score)
+    for i, digit_char in enumerate(score_digits):
+        digit = int(digit_char)
+        texture_id = digit_texture_id_dict.get(digit)
+        drawCube(13.0 + i * 1.2, -1.0, 0.0, (1.0, 1.0, 1.0), texture_id)
+
 def drawGhostCube(x=0.0, y=0.0, z=0.0, color=(1.0, 1.0, 1.0)):
     # ゴーストブロックは半透明で描画する
     glEnable(GL_BLEND) # ブレンドを有効にする
@@ -718,8 +750,10 @@ def keyboard(window, key, scancode, action, mods):
         if can_hold:
             if hold_mino_type is None:
                 hold_mino_type = current_mino_type
-                current_mino_type = next_mino_type
-                next_mino_type = get_next_mino_type()
+                current_mino_type = next_mino_queue.pop(0)
+                refill_next_queue()  # ネクストキューを再充填
+                next_mino_type = next_mino_queue[0]  # ネクストキューの先頭を次のミノとして設定
+                
             else:
                 current_mino_type, hold_mino_type = hold_mino_type, current_mino_type
 
