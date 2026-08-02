@@ -112,6 +112,8 @@ class GameState:
     mino_bag: list = dataclass_field(default_factory=list)
 
 state = GameState()
+digit_texture_id_dict = {}
+window_handle = None
 
 # ==========================
 # フィールド設定
@@ -145,14 +147,14 @@ SCORE_TABLE = {
 # ==========================
 # ウィンドウ設定
 # ==========================
-WINDOW_WIDTH = 512
+WINDOW_WIDTH = 1024
 WINDOW_HEIGHT = 768
 WINDOW_TITLE = "3D Tetris"
 
 # ==========================
 # カメラ・ライト設定
 # ==========================
-CAMERA_EYE = (15.0, 10.0, 30.0)
+CAMERA_EYE = (15.0, 20.0, 30.0)
 CAMERA_CENTER = (5.0, 10.0, 0.0)
 CAMERA_UP = (0.0, 1.0, 0.0)
 
@@ -222,6 +224,36 @@ KEY_ROTATE_RIGHT = (glfw.KEY_UP, glfw.KEY_E)
 KEY_ROTATE_LEFT = (glfw.KEY_Q, glfw.KEY_LEFT_CONTROL)
 KEY_HOLD = (glfw.KEY_C, glfw.KEY_LEFT_SHIFT)
 
+
+def current_level():
+    """現在のレベルを返す。レベル1から開始する。"""
+    return state.total_lines_cleared // LINES_PER_LEVEL + 1
+
+
+def update_window_title():
+    """スコアとゲーム状態をウィンドウタイトルへ反映する。"""
+    if window_handle is None:
+        return
+
+    status = "GAME OVER - R: Restart" if state.game_over else (
+        "PAUSED" if not state.drop_switch else "Playing"
+    )
+    glfw.set_window_title(
+        window_handle,
+        f"{WINDOW_TITLE} | Score: {state.score} | "
+        f"Lines: {state.total_lines_cleared} | Level: {current_level()} | {status}",
+    )
+
+
+def set_game_over():
+    """ゲームオーバー状態へ移行し、表示とログを更新する。"""
+    state.drop_switch = False
+    state.game_over = True
+    print("Game Over!")
+    print(f"Final Score: {state.score}, Total Lines Cleared: {state.total_lines_cleared}")
+    print("Press R to restart the game.")
+    update_window_title()
+
 # 画像ファイルをOpenGLテクスチャとして読み込む
 def initTextureFromFile(filename):
 
@@ -279,6 +311,7 @@ def reset_game():
     state.last_drop_time = glfw.get_time()
     state.field = np.zeros((FIELD_HEIGHT, FIELD_WIDTH), dtype=int) 
     state.game_over = False
+    update_window_title()
     print("Game Reset!")
 
 
@@ -301,10 +334,20 @@ def lock_and_spawn_mino():
     if state.game_over:
         return
 
+    # フィールド上端より上にブロックが残った場合は固定せずゲームオーバーにする。
+    block_positions = [
+        (
+            int(state.mino_pos[0] + state.mino[i][0]),
+            int(state.mino_pos[1] + state.mino[i][1]),
+        )
+        for i in range(4)
+    ]
+    if any(y >= FIELD_HEIGHT for _, y in block_positions):
+        set_game_over()
+        return
+
     color_id = COLOR_IDS[state.current_mino_type]
-    for i in range(4):
-        x = int(state.mino_pos[0] + state.mino[i][0])
-        y = int(state.mino_pos[1] + state.mino[i][1])
+    for x, y in block_positions:
         if 0 <= x < FIELD_WIDTH and 0 <= y < FIELD_HEIGHT and state.field[y][x] == 0:
             state.field[y][x] = color_id
 
@@ -317,6 +360,7 @@ def lock_and_spawn_mino():
         print(f"Level Up! Total Lines Cleared: {state.total_lines_cleared}")
     
     state.last_total_lines_cleared = state.total_lines_cleared
+    update_window_title()
 
     state.mino_pos = SPAWN_POS.copy()
     
@@ -331,11 +375,7 @@ def lock_and_spawn_mino():
 
 
     if check_collision(state.mino_pos, state.mino):
-        print("Game Over!")
-        print(f"Final Score: {state.score}, Total Lines Cleared: {state.total_lines_cleared}")
-        print("Press R to restart the game.")
-        state.drop_switch = False
-        state.game_over = True
+        set_game_over()
 
 # ミノを回転し、必要なら簡易ウォールキックを試す
 def rotate_mino(direction):
@@ -755,6 +795,7 @@ def keyboard(window, key, scancode, action, mods):
             state.drop_switch = True
             state.pause_started_time = None
             print("Resumed")
+        update_window_title()
         refresh(window)
         return
 
@@ -809,11 +850,7 @@ def keyboard(window, key, scancode, action, mods):
             state.mino_pos = SPAWN_POS.copy()
             
             if check_collision(state.mino_pos, state.mino):
-                print("Game Over!")
-                print(f"Final Score: {state.score}, Total Lines Cleared: {state.total_lines_cleared}")
-                print("Press R to restart the game.")
-                state.drop_switch = False
-                state.game_over = True
+                set_game_over()
                 return
             
             state.lock_timer = None
@@ -828,6 +865,8 @@ def refresh(window):
     
 # 射影行列を設定する
 def perspective(width, height):
+    if width <= 0 or height <= 0:
+        return
     glMatrixMode(GL_PROJECTION)
     glLoadIdentity()
     gluPerspective(45.0, width / height, 1.0, 100.0)
@@ -835,12 +874,13 @@ def perspective(width, height):
     
 # ウィンドウサイズ変更時に射影行列を更新する
 def resize(window, width, height):
+    glViewport(0, 0, width, height)
     perspective(width, height)
     
 # OpenGLとゲーム状態を初期化する
 def init():
     glClearColor(0.2, 0.2, 0.2, 1.0)
-    perspective(WINDOW_WIDTH, WINDOW_WIDTH)
+    perspective(WINDOW_WIDTH, WINDOW_HEIGHT)
     
     glEnable(GL_CULL_FACE)
     glEnable(GL_DEPTH_TEST)
@@ -854,47 +894,61 @@ def init():
     
 # エントリーポイント
 def main():
-    global digit_texture_id_dict
-    glfw.init()
+    global digit_texture_id_dict, window_handle
+    if not glfw.init():
+        raise RuntimeError("GLFWの初期化に失敗しました。")
     
     glfw.window_hint(glfw.SAMPLES, 4)
     
     window = glfw.create_window(WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE, None, None)
-    glfw.make_context_current(window)
-    init()
+    if window is None:
+        glfw.terminate()
+        raise RuntimeError("OpenGLウィンドウの作成に失敗しました。")
 
-    digit_texture_id_dict = {
-        i: initTextureFromFile(DIGIT_DIR / f"{i}.png")
-        for i in range(10)
-    }
-    
-    glfw.set_window_refresh_callback(window, refresh)
-    glfw.set_key_callback(window, keyboard)
-    
-    refresh(window)
-    
-    while not glfw.window_should_close(window):
-        glfw.poll_events()
-        display()
-        glfw.swap_buffers(window)
-        
-        
-    if digit_texture_id_dict:
-        glDeleteTextures([int(texture_id) for texture_id in digit_texture_id_dict.values()])
-    glfw.destroy_window(window)
-    glfw.terminate()
+    window_handle = window
+    try:
+        glfw.make_context_current(window)
+        init()
+
+        missing_assets = [DIGIT_DIR / f"{i}.png" for i in range(10) if not (DIGIT_DIR / f"{i}.png").is_file()]
+        if missing_assets:
+            raise FileNotFoundError(f"数字テクスチャが見つかりません: {missing_assets[0]}")
+
+        digit_texture_id_dict = {
+            i: initTextureFromFile(DIGIT_DIR / f"{i}.png")
+            for i in range(10)
+        }
+
+        glfw.set_window_refresh_callback(window, refresh)
+        glfw.set_framebuffer_size_callback(window, resize)
+        glfw.set_key_callback(window, keyboard)
+
+        refresh(window)
+
+        while not glfw.window_should_close(window):
+            glfw.poll_events()
+            display()
+            glfw.swap_buffers(window)
+    finally:
+        if digit_texture_id_dict:
+            glDeleteTextures([int(texture_id) for texture_id in digit_texture_id_dict.values()])
+            digit_texture_id_dict.clear()
+        glfw.destroy_window(window)
+        window_handle = None
+        glfw.terminate()
 
 if __name__ == "__main__":
     main()
 
 '''
-鬩包ｽｶ驗呻ｽｫ郢晢ｽｻ/ 鬩包ｽｶ驗呻ｽｫ郢晢ｽｻ         |  鬮ｯ譎｢・ｽ・ｾ郢晢ｽｻ繝ｻ・ｦ鬮ｯ・ｷ繝ｻ・ｿ郢晢ｽｻ繝ｻ・ｳ鬯ｩ蜍溪・繝ｻ・ｽ繝ｻ・ｻ鬮ｯ・ｷ鬮ｦ・ｪ郢晢ｽｻ
-鬩包ｽｶ驗呻ｽｫ郢晢ｽｻ             |  鬩幢ｽ｢繝ｻ・ｧ郢晢ｽｻ繝ｻ・ｽ鬩幢ｽ｢隴弱・・ｽ・ｼ隴∫浹螟石碑ｭ取得・ｽ・ｳ繝ｻ・ｨ繝ｻ蜿厄ｽｺ・ｽ繝ｻ・ｹ隴擾ｽｴ郢晢ｽｻ驛｢譎｢・ｽ・ｻ
-Space          |  鬩幢ｽ｢隴乗・・ｽ・ｸ驗呻ｽｫ郢晢ｽｻ鬩幢ｽ｢隴取得・ｽ・ｳ繝ｻ・ｨ驛｢譎｢・ｽ・ｩ鬩幢ｽ｢隴趣ｽ｢繝ｻ・ｽ繝ｻ・ｭ鬩幢ｽ｢隴擾ｽｴ郢晢ｽｻ驛｢譎｢・ｽ・ｻ
-鬩包ｽｶ驗呻ｽｫ郢晢ｽｻ/ E          |  鬮ｯ・ｷ繝ｻ・ｿ郢晢ｽｻ繝ｻ・ｳ鬮ｯ諛・ｻｸ繝ｻ・ｫ郢晢ｽｻ繝ｻ・ｽ繝ｻ・ｻ郢晢ｽｻ繝ｻ・｢
-Q / Left Ctrl  |  鬮ｯ譎｢・ｽ・ｾ郢晢ｽｻ繝ｻ・ｦ鬮ｯ諛・ｻｸ繝ｻ・ｫ郢晢ｽｻ繝ｻ・ｽ繝ｻ・ｻ郢晢ｽｻ繝ｻ・｢
-C / Left Shift |  鬩幢ｽ｢隴取得・ｽ・ｸ陷ｷ・ｶ郢晢ｽｻ鬩幢ｽ｢隴趣ｽ｢繝ｻ・ｽ繝ｻ・ｫ鬩幢ｽ｢隴擾ｽｴ郢晢ｽｻ
-P              |  鬩幢ｽ｢隴弱・・ｺ・｢驛｢譎｢・ｽ・ｻ鬩幢ｽ｢繝ｻ・ｧ郢晢ｽｻ繝ｻ・ｺ/鬮ｯ・ｷ・つ髯憺屮・ｽ・ｼ髯晢ｽｷ郢晢ｽｻ
-R              |  鬩幢ｽ｢隴趣ｽ｢繝ｻ・ｽ繝ｻ・ｪ鬩幢ｽ｢繝ｻ・ｧ郢晢ｽｻ繝ｻ・ｹ鬩幢ｽ｢繝ｻ・ｧ郢晢ｽｻ繝ｻ・ｿ鬩幢ｽ｢隴趣ｽ｢繝ｻ・ｽ繝ｻ・ｼ鬩幢ｽ｢隴擾ｽｴ郢晢ｽｻ
-Escape         |  鬯ｩ謳ｾ・ｽ・ｨ驛｢・ｧ郢晢ｽｻ繝ｻ・ｽ繝ｻ・ｺ驛｢譎｢・ｽ・ｻ
+操作キー
+Left / Right   : ミノを左右へ移動
+Down           : ソフトドロップ
+Space          : ハードドロップ
+Up / E         : 右回転
+Q / Left Ctrl  : 左回転
+C / Left Shift : ホールド
+Escape         : 一時停止／再開
+R              : ゲームをリスタート
+U              : ゲームを終了
 '''
